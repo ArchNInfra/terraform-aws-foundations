@@ -16,3 +16,4 @@ override.tf.json
 
 # Terraform plan output
 *.tfplan
+checklist.md
