@@ -1,4 +1,6 @@
-# Configure AWS Provider
+############################################
+# Provider & Region
+############################################
 terraform {
   required_providers {
     aws = {
@@ -9,102 +11,110 @@ terraform {
 }
 
 provider "aws" {
-  region = "ap-northeast-1" # Modify according to your actual region
+  region = "ap-northeast-1"
 }
 
-# Get available AZs (avoid hardcoding)
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Create custom VPC (disable default VPC)
-resource "aws_vpc" "custom_vpc" {
+############################################
+# Network (Public)
+############################################
+resource "aws_vpc" "t3" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-
-  tags = {
-    Name = "custom-vpc-t2"
-  }
+  tags                 = { Name = "t3-vpc" }
 }
 
-# Create public subnet
-resource "aws_subnet" "public_subnet" {
-  vpc_id                  = aws_vpc.custom_vpc.id
+resource "aws_internet_gateway" "t3" {
+  vpc_id = aws_vpc.t3.id
+  tags   = { Name = "t3-igw" }
+}
+
+resource "aws_subnet" "t3_public" {
+  vpc_id                  = aws_vpc.t3.id
   cidr_block              = "10.0.1.0/24"
   availability_zone       = data.aws_availability_zones.available.names[0]
   map_public_ip_on_launch = true
-
-  tags = {
-    Name = "public-subnet-t2"
-  }
+  tags                    = { Name = "t3-public-subnet" }
 }
 
-# Create internet gateway
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.custom_vpc.id
-
-  tags = {
-    Name = "igw-t2"
-  }
-}
-
-# Create route table
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.custom_vpc.id
-
+resource "aws_route_table" "t3_public" {
+  vpc_id = aws_vpc.t3.id
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
+    gateway_id = aws_internet_gateway.t3.id
   }
-
-  tags = {
-    Name = "public-rt-t2"
-  }
+  tags = { Name = "t3-public-rt" }
 }
 
-# Associate route table with subnet
-resource "aws_route_table_association" "public_rta" {
-  subnet_id      = aws_subnet.public_subnet.id
-  route_table_id = aws_route_table.public_rt.id
+resource "aws_route_table_association" "t3_assoc" {
+  subnet_id      = aws_subnet.t3_public.id
+  route_table_id = aws_route_table.t3_public.id
 }
 
-# Minimal security group (only open 80/443; no SSH)
-resource "aws_security_group" "web_sg" {
-  name        = "t2-web-sg-minimal"
+############################################
+# Security Group (HTTP/HTTPS only — no SSH)
+############################################
+resource "aws_security_group" "t3_web" {
+  name        = "t3-web-sg"
   description = "Allow HTTP/HTTPS only (no SSH)"
-  vpc_id      = aws_vpc.custom_vpc.id
+  vpc_id      = aws_vpc.t3.id
 
-  # HTTP (80) - open to public
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTP traffic from anywhere"
+    description = "HTTP"
   }
 
-  # HTTPS (443) - open to public
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTPS traffic from anywhere"
+    description = "HTTPS"
   }
 
-  # Note: Explicitly no SSH (22) rule
-
-  # Allow all outbound traffic
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
+    description = "All egress"
   }
 
-  tags = {
-    Name = "t2-web-sg-minimal"
+  tags = { Name = "t3-web-sg" }
+}
+
+############################################
+# AMI (Amazon Linux 2023)
+############################################
+data "aws_ami" "al2023" {
+  owners      = ["amazon"]
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
   }
+}
+
+
+############################################
+# EC2 (via SSM, no SSH)
+############################################
+resource "aws_instance" "web" {
+  ami           = data.aws_ami.al2023.id
+  instance_type = "t3.micro"
+
+  subnet_id              = aws_subnet.t3_public.id
+  vpc_security_group_ids = [aws_security_group.t3_web.id]
+
+  iam_instance_profile = "EC2SSMRole"
+
+  tags = { Name = "t3-web-ssm" }
 }
